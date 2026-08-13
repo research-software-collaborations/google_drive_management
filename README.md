@@ -86,6 +86,19 @@ Files uploaded to Drive:
 
 ---
 
+### 4. Merge receipts into one PDF
+
+Reads the **Receipts** Google Doc, downloads all linked PDF files from Drive, merges them
+into a single `merged.pdf`, and uploads it to the guest's Drive folder.
+
+```bash
+python merge_receipts.py --event "HSF-India Summer 2026" --name "Jane Smith"
+```
+
+Non-PDF files linked in the Receipts doc are skipped automatically.
+
+---
+
 ## Other scripts
 
 ### `get_rates.py`
