@@ -21,9 +21,13 @@ playwright install chromium
 2. Enable the **Google Docs API**, **Google Drive API**, and **Google Forms API**
 3. Create an OAuth 2.0 client ID (Desktop app) and download it as `google_apps.json`
 4. Add any non-owner Google accounts as test users under APIs & Services → OAuth consent screen
+5. Place `google_apps.json` in the same directory as the scripts (`reimbursements/`)
 
 On first run, a browser window will open for authentication. The token is cached in
-`token.json` thereafter. Neither file should be committed to version control.
+`token.json` in the same directory thereafter.
+
+Both `google_apps.json` and `token.json` are listed in `.gitignore` and will not be
+committed to version control.
 
 ---
 

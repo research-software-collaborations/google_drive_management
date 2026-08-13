@@ -1,0 +1,6 @@
+token.json
+google_apps.json
+*.pdf
+saved/
+__pycache__/
+*.pyc
