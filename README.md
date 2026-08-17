@@ -105,6 +105,30 @@ Non-PDF files linked in the Receipts doc are skipped automatically.
 
 ## Other scripts
 
+### `list_events.py`
+
+Lists events created by previous onboarding runs, with each guest's workflow status.
+
+```bash
+python list_events.py           # show 5 most recent events (default)
+python list_events.py --limit 20
+python list_events.py --all
+```
+
+Output shows each event with its guests, indicating whether:
+- **receipts** — the Receipts doc exists (`collect_receipts.py` has been run)
+- **reimb** — `reimbursement.pdf` exists (`process_template.py` has been run)
+
+```
+Events (top 5, most recent first):
+
+  HSF-India Summer 2026   2026-08-15 10:30   https://drive.google.com/drive/folders/...
+    Jane Smith    receipts ✓  reimb ✗  https://drive.google.com/drive/folders/...
+    John Doe      receipts ✓  reimb ✓  https://drive.google.com/drive/folders/...
+```
+
+---
+
 ### `get_rates.py`
 
 Fetches historical exchange rates from [x-rates.com](https://www.x-rates.com) and
