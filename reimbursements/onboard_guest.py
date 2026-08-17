@@ -173,7 +173,7 @@ def compose_onboard_email(name, email, event, doc_url, form_url):
         f"2. Upload your receipts and any on-boarding documents here:\n"
         f"   {form_url}\n\n"
         f"   (You will need to be signed into a Google account to upload files.)\n\n"
-        f"Once both are complete, please let us know and we will process your reimbursement.\n\n"
+        f"Once completed you should receive a completed guest reimbursement form from us to check and sign.\n\n"
         f"Many thanks,\nDavid\n"
     )
     open_mail_draft(email, subject, body)
