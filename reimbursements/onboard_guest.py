@@ -15,13 +15,10 @@ import argparse
 import os
 import subprocess
 from urllib.parse import urlencode
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
-TOKEN_FILE       = "token.json"
-CREDENTIALS_FILE = "google_apps.json"
+from auth import get_credentials
+
 TEMPLATE_DOC_ID  = "15SfU0jNphjcIkWqLQYXAtJF5kYnDut4VLYGNXhAseXQ"
 ROOT_FOLDER_ID   = "11MV67UxEjRDSf8ecl-5xKtwyAKGQu1Y3CUEV9JgMOkIiVVy32pjHDXxI2PW3p6OMoE824-aX"
 
@@ -29,28 +26,6 @@ ROOT_FOLDER_ID   = "11MV67UxEjRDSf8ecl-5xKtwyAKGQu1Y3CUEV9JgMOkIiVVy32pjHDXxI2PW
 FORM_RESPONDER_URL = "https://docs.google.com/forms/d/e/1FAIpQLSdRXl7IkgxmtTrj72lxeWz3g0HUKUbKoHzyseT2cmu5rZ7fYg/viewform"
 NAME_ENTRY_ID      = "1293349445"
 EVENT_ENTRY_ID     = "1936528846"
-
-SCOPES = [
-    "https://www.googleapis.com/auth/drive",
-    "https://www.googleapis.com/auth/documents",
-    "https://www.googleapis.com/auth/forms.body",
-    "https://www.googleapis.com/auth/forms.responses.readonly",
-]
-
-
-def get_credentials():
-    creds = None
-    if os.path.exists(TOKEN_FILE):
-        creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open(TOKEN_FILE, "w") as f:
-            f.write(creds.to_json())
-    return creds
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +145,7 @@ def compose_onboard_email(name, email, event, doc_url, form_url):
         f"1. Fill in your expense details here:\n"
         f"   {doc_url}\n\n"
         f"   Enter all amounts in the original currency (USD, GBP, INR, etc.) — we will handle the conversion.\n\n"
+        f"   You can find instructions for expenses and filling the expense detail form at https://research-software-collaborations.org/docs/reimbursement.html\n\n"
         f"2. Upload your receipts and any on-boarding documents here:\n"
         f"   {form_url}\n\n"
         f"   (You will need to be signed into a Google account to upload files.)\n\n"

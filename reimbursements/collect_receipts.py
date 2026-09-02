@@ -11,41 +11,16 @@ Usage:
 import argparse
 import os
 import sys
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
-TOKEN_FILE       = "token.json"
-CREDENTIALS_FILE = "google_apps.json"
+from auth import get_credentials
+
 ROOT_FOLDER_ID   = "11MV67UxEjRDSf8ecl-5xKtwyAKGQu1Y3CUEV9JgMOkIiVVy32pjHDXxI2PW3p6OMoE824-aX"
 
 # Shared upload form
 TEMPLATE_FORM_ID = "1virimgEaohXGFdaraQ81EjCUjBmpn50JU9LRSEESYAk"
 NAME_QUESTION_ID  = "4d16f245"
 EVENT_QUESTION_ID = "736d15ce"
-
-SCOPES = [
-    "https://www.googleapis.com/auth/drive",
-    "https://www.googleapis.com/auth/documents",
-    "https://www.googleapis.com/auth/forms.body",
-    "https://www.googleapis.com/auth/forms.responses.readonly",
-]
-
-
-def get_credentials():
-    creds = None
-    if os.path.exists(TOKEN_FILE):
-        creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open(TOKEN_FILE, "w") as f:
-            f.write(creds.to_json())
-    return creds
 
 
 # ---------------------------------------------------------------------------
