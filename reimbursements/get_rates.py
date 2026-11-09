@@ -68,7 +68,8 @@ def save_pdf(url, base, date, pdf_dir="."):
         browser = p.chromium.launch()
         page = browser.new_page()
         page.goto(url, wait_until="networkidle")
-        page.pdf(path=path, format="A4")
+        page.emulate_media(media="screen")  # avoid print CSS hiding the rates table
+        page.pdf(path=path, format="Letter", print_background=True)
         browser.close()
     return path
 

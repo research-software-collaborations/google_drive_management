@@ -9,17 +9,21 @@ Usage:
 import argparse
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
 import os
+
 from datetime import date
+import httplib2
 import requests
 from bs4 import BeautifulSoup
 from pypdf import PdfReader, PdfWriter
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from google.oauth2.credentials import Credentials
+from google_auth_httplib2 import AuthorizedHttp
 from playwright.sync_api import sync_playwright
 
 TOKEN_FILE = "token.json"
@@ -29,6 +33,9 @@ MONTHS = {
     "January": 1, "February": 2, "March": 3, "April": 4,
     "May": 5, "June": 6, "July": 7, "August": 8,
     "September": 9, "October": 10, "November": 11, "December": 12,
+    "Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4,
+    "Jun": 6, "Jul": 7, "Aug": 8,
+    "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12,
 }
 
 CURRENCY_NAMES = {
@@ -59,6 +66,9 @@ CURRENCY_NAMES = {
     "ZAR": "South African Rand",
 }
 
+STANDARD_MEALS = {"Breakfast", "Lunch", "Dinner"}
+
+
 SECTION_HEADINGS = {
     "Personal information",
     "Trip information",
@@ -66,6 +76,35 @@ SECTION_HEADINGS = {
     "Meals",
     "Local Transportation",
 }
+
+
+# ---------------------------------------------------------------------------
+# Interactive meal description normalisation
+# ---------------------------------------------------------------------------
+
+def normalize_meal_descriptions(meals_raw):
+    """For any meal whose description isn't Breakfast/Lunch/Dinner, ask the user."""
+    choices = list(STANDARD_MEALS)  # ["Breakfast", "Lunch", "Dinner"]
+    for row in meals_raw:
+        if row["description"] not in STANDARD_MEALS:
+            print(f"\nUnrecognised meal description: {row['description']!r}")
+            print(f"  Date: {row['date']}  Amount: {row['amount']} {row['currency']}")
+            print("  Change to:")
+            for i, name in enumerate(choices, 1):
+                print(f"    {i}. {name}")
+            while True:
+                answer = input("  Enter 1/2/3 or full name (or press Enter to keep as-is): ").strip()
+                if not answer:
+                    break
+                if answer in ("1", "2", "3"):
+                    row["description"] = choices[int(answer) - 1]
+                    print(f"  -> Changed to: {row['description']}")
+                    break
+                if answer in STANDARD_MEALS:
+                    row["description"] = answer
+                    print(f"  -> Changed to: {row['description']}")
+                    break
+                print("  Please enter 1, 2, 3, or Breakfast/Lunch/Dinner.")
 
 
 # ---------------------------------------------------------------------------
@@ -162,8 +201,9 @@ def save_rate_pdf(date_iso, output_path):
     with sync_playwright() as p:
         browser = p.chromium.launch()
         page = browser.new_page()
-        page.goto(url, wait_until="networkidle")
-        page.pdf(path=output_path, format="A4")
+        page.goto(url, wait_until="networkidle", timeout=60000)
+        page.emulate_media(media="screen")
+        page.pdf(path=output_path, format="Letter", print_background=True)
         browser.close()
 
 
@@ -181,7 +221,7 @@ def cell_text(cell):
 
 def parse_doc(doc_id):
     creds = Credentials.from_authorized_user_file(TOKEN_FILE)
-    docs = build("docs", "v1", credentials=creds)
+    docs = build("docs", "v1", http=AuthorizedHttp(creds, http=httplib2.Http(timeout=120)))
     doc = docs.documents().get(documentId=doc_id).execute()
 
     sections = {}
@@ -219,7 +259,7 @@ def parse_expenses(table):
         rows.append({
             "date":        date_s.strip(),
             "description": description.strip(),
-            "amount":      float(cost_s.strip()) if cost_s.strip() else 0.0,
+            "amount":      float(cost_s.strip().replace(",", "")) if cost_s.strip() else 0.0,
             "currency":    currency.strip().upper(),
         })
     return rows
@@ -276,7 +316,7 @@ def fill_pdf(personal, trip, flights, meals_total, transport_total, output_path)
         })
     if transport_total is not None:
         expense_rows.append({
-            "date": "", "description": "Local Transportation (breakout attached)",
+            "date": "", "description": "Transportation (breakout attached)",
             "usd_amount": transport_total, "currency": None,
         })
 
@@ -460,11 +500,47 @@ def copy_doc_to_folder(drive, doc_id, folder_id, name):
 
 
 def upload_pdf(drive, local_path, folder_id, name):
-    drive.files().create(
+    f = drive.files().create(
         body={"name": name, "parents": [folder_id]},
         media_body=MediaFileUpload(local_path, mimetype="application/pdf"),
         fields="id"
     ).execute()
+    return f["id"]
+
+
+def append_files_to_receipts_doc(docs, drive, folder_id, file_entries):
+    """Append a 'Generated documents' section with file links to the Receipts doc."""
+    files = drive.files().list(
+        q=(f"'{folder_id}' in parents"
+           f" and mimeType='application/vnd.google-apps.document'"
+           f" and name='Receipts' and trashed=false"),
+        fields="files(id)",
+    ).execute().get("files")
+    if not files:
+        return
+    doc_id = files[0]["id"]
+
+    heading = "Generated documents\n"
+    full_text = heading + "".join(f"{name}\n" for _, name in file_entries)
+
+    doc = docs.documents().get(documentId=doc_id).execute()
+    end_index = doc["body"]["content"][-1]["endIndex"] - 1
+
+    requests = [{"insertText": {"location": {"index": end_index}, "text": full_text}}]
+    requests.append({"updateParagraphStyle": {
+        "range": {"startIndex": end_index, "endIndex": end_index + len(heading)},
+        "paragraphStyle": {"namedStyleType": "HEADING_2"},
+        "fields": "namedStyleType",
+    }})
+    idx = end_index + len(heading)
+    for file_id, name in file_entries:
+        requests.append({"updateTextStyle": {
+            "range": {"startIndex": idx, "endIndex": idx + len(name)},
+            "textStyle": {"link": {"url": f"https://drive.google.com/file/d/{file_id}/view"}},
+            "fields": "link",
+        }})
+        idx += len(name) + 1
+    docs.documents().batchUpdate(documentId=doc_id, body={"requests": requests}).execute()
 
 
 # ---------------------------------------------------------------------------
@@ -512,6 +588,8 @@ def main():
     meals_raw     = parse_expenses(sections["Meals"])
     transport_raw = parse_expenses(sections["Local Transportation"])
 
+    normalize_meal_descriptions(meals_raw)
+
     rates_cache = {}
 
     flights = []
@@ -543,13 +621,22 @@ def main():
     last = personal.get("Last name", "Guest")
 
     creds = Credentials.from_authorized_user_file(TOKEN_FILE)
-    drive = build("drive", "v3", credentials=creds)
-    docs  = build("docs",  "v1", credentials=creds)
+    _http = AuthorizedHttp(creds, http=httplib2.Http(timeout=120))
+    drive = build("drive", "v3", http=_http)
+    docs  = build("docs",  "v1", http=_http)
 
     folder_id = drive.files().get(
         fileId=args.doc_id, fields="parents"
     ).execute()["parents"][0]
     print(f"\nUsing folder: https://drive.google.com/drive/folders/{folder_id}")
+
+    folder_meta = drive.files().get(fileId=folder_id, fields="name,parents").execute()
+    person_name = folder_meta["name"]
+    event_name  = drive.files().get(
+        fileId=folder_meta["parents"][0], fields="name"
+    ).execute()["name"]
+    print(f"If you haven't collected uploads yet, run first:")
+    print(f"  python collect_receipts.py --event \"{event_name}\" --name \"{person_name}\"")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         pdf_name = "reimbursement.pdf"
@@ -568,11 +655,14 @@ def main():
             print(f"  Saved {rate_pdf_name}")
 
         print("Uploading filled PDF...")
-        upload_pdf(drive, pdf_path, folder_id, pdf_name)
+        generated_files = []
+        fid = upload_pdf(drive, pdf_path, folder_id, pdf_name)
+        generated_files.append((fid, pdf_name))
 
         for path, name in rate_pdfs:
             print(f"Uploading {name}...")
-            upload_pdf(drive, path, folder_id, name)
+            fid = upload_pdf(drive, path, folder_id, name)
+            generated_files.append((fid, name))
 
         print("Creating breakout doc...")
         breakout_name = "MealsTransportation_breakout"
@@ -588,7 +678,11 @@ def main():
         breakout_pdf_path = os.path.join(tmpdir, f"{breakout_name}.pdf")
         with open(breakout_pdf_path, "wb") as f:
             f.write(pdf_bytes)
-        upload_pdf(drive, breakout_pdf_path, folder_id, f"{breakout_name}.pdf")
+        fid = upload_pdf(drive, breakout_pdf_path, folder_id, f"{breakout_name}.pdf")
+        generated_files.append((fid, f"{breakout_name}.pdf"))
+
+        print("Updating Receipts doc...")
+        append_files_to_receipts_doc(docs, drive, folder_id, generated_files)
 
         shutil.copy(pdf_path, pdf_name)
         print(f"Saved local copy: {pdf_name}")
@@ -602,9 +696,7 @@ def main():
     body = (
         f"Dear {first},\n\n"
         f"Please find attached your reimbursement form for {event}.\n\n"
-        f"Could you sign it (in the \"Signature of guest\" section) and return\n"
-        f"the signed copy to us? A digital signature is preferred, or you\n"
-        f"can sign and scan.\n\n"
+        f"Could you sign it (in the \"Signature of guest\" section) and return the signed copy to us? A digital signature is preferred, or you can sign and scan.\n\n"
         f"Many thanks,\nDavid\n"
     )
     open_mail_draft(guest_email, subject, body, attachment=pdf_name)
@@ -619,6 +711,9 @@ def main():
         print(f"  Transportation total: ${transport_total:.2f}")
     grand = sum(f["usd_amount"] for f in flights) + (meals_total or 0) + (transport_total or 0)
     print(f"  Grand total (USD):    ${grand:.2f}")
+
+    print(f"\nTo merge all receipts into a single PDF, run:")
+    print(f"  python merge_receipts.py --event \"{event_name}\" --name \"{person_name}\"")
 
 
 if __name__ == "__main__":

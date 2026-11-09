@@ -1,24 +1,33 @@
 """
-Onboard a guest for HSF-India reimbursement.
+Onboard one or more guests for HSF-India reimbursement.
 
-Usage:
+Usage (single guest):
     python onboard_guest.py --event "HSF-India 2026" --name "Jane Smith" --email jane@example.com
 
-Creates <root>/<event>/<name>/ in Drive, copies the expense template into it,
-and prints a draft invitation email with a pre-filled upload form link.
+Usage (bulk, from CSV file):
+    python onboard_guest.py --event "HSF-India 2026" --file guests.csv
+
+The CSV file should have two columns (name, email), with or without a header row.
+
+Creates <root>/<event>/<name>/ in Drive for each guest, copies the expense template
+into it, and opens a draft invitation email in Mail.app with a pre-filled upload form link.
 
 Note: file upload questions in Google Forms require respondents to be signed
 into a Google account.
 """
 
 import argparse
+import csv
 import os
 import subprocess
 from urllib.parse import urlencode
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
-from auth import get_credentials
-
+TOKEN_FILE       = "token.json"
+CREDENTIALS_FILE = "google_apps.json"
 TEMPLATE_DOC_ID  = "15SfU0jNphjcIkWqLQYXAtJF5kYnDut4VLYGNXhAseXQ"
 ROOT_FOLDER_ID   = "11MV67UxEjRDSf8ecl-5xKtwyAKGQu1Y3CUEV9JgMOkIiVVy32pjHDXxI2PW3p6OMoE824-aX"
 
@@ -26,6 +35,28 @@ ROOT_FOLDER_ID   = "11MV67UxEjRDSf8ecl-5xKtwyAKGQu1Y3CUEV9JgMOkIiVVy32pjHDXxI2PW
 FORM_RESPONDER_URL = "https://docs.google.com/forms/d/e/1FAIpQLSdRXl7IkgxmtTrj72lxeWz3g0HUKUbKoHzyseT2cmu5rZ7fYg/viewform"
 NAME_ENTRY_ID      = "1293349445"
 EVENT_ENTRY_ID     = "1936528846"
+
+SCOPES = [
+    "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/documents",
+    "https://www.googleapis.com/auth/forms.body",
+    "https://www.googleapis.com/auth/forms.responses.readonly",
+]
+
+
+def get_credentials():
+    creds = None
+    if os.path.exists(TOKEN_FILE):
+        creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
+            creds = flow.run_local_server(port=0)
+        with open(TOKEN_FILE, "w") as f:
+            f.write(creds.to_json())
+    return creds
 
 
 # ---------------------------------------------------------------------------
@@ -140,16 +171,14 @@ def compose_onboard_email(name, email, event, doc_url, form_url):
     subject = f"HSF-India expense form — {event}"
     body = (
         f"Dear {first},\n\n"
-        f"Thank you for participating in {event}. To process your reimbursement\n"
-        f"please complete the two steps below.\n\n"
+        f"Thank you for participating in {event}. To process your reimbursement, please complete the two steps below.\n\n"
         f"1. Fill in your expense details here:\n"
         f"   {doc_url}\n\n"
         f"   Enter all amounts in the original currency (USD, GBP, INR, etc.) — we will handle the conversion.\n\n"
-        f"   You can find instructions for expenses and filling the expense detail form at https://research-software-collaborations.org/docs/reimbursement.html\n\n"
-        f"2. Upload your receipts and any on-boarding documents here:\n"
+        f"2. Upload your receipts and any on-boarding documents (if previously requested) here:\n"
         f"   {form_url}\n\n"
         f"   (You will need to be signed into a Google account to upload files.)\n\n"
-        f"Once completed you should receive a completed guest reimbursement form from us to check and sign.\n\n"
+        f"A few notes on what we can reimburse: visas, transport, eSIMs, accommodation, and meals are all covered at actual cost. Any small incidentals can be listed under Meals — just describe them as a meal. Meal expenses should be under $50 per meal and $75 per day in total, though given the meals provided during the program this is unlikely to be an issue. For hotel charges, please include only the nightly room rate and taxes; any meals or transport charged to the room should be listed as separate entries. Finally, Princeton's finance office tends to query identical round-number entries appearing more than once.\n\n"
         f"Many thanks,\nDavid\n"
     )
     open_mail_draft(email, subject, body)
@@ -159,20 +188,11 @@ def compose_onboard_email(name, email, event, doc_url, form_url):
 # Main
 # ---------------------------------------------------------------------------
 
-def main():
-    parser = argparse.ArgumentParser(description="Onboard a guest for HSF-India reimbursement")
-    parser.add_argument("--event", required=True, help="Event name, e.g. 'HSF-India Summer 2026'")
-    parser.add_argument("--name",  required=True, help="Guest full name, e.g. 'Jane Smith'")
-    parser.add_argument("--email", required=True, help="Guest email address")
-    args = parser.parse_args()
+def onboard_one(drive, name, email, event):
+    print(f"\nOnboarding {name} ({email}) for {event}...")
 
-    creds = get_credentials()
-    drive = build("drive", "v3", credentials=creds)
-
-    print(f"Onboarding {args.name} for {args.event}...")
-
-    event_folder_id  = get_or_create_folder(drive, args.event, ROOT_FOLDER_ID)
-    person_folder_id = get_or_create_folder(drive, args.name, event_folder_id)
+    event_folder_id  = get_or_create_folder(drive, event, ROOT_FOLDER_ID)
+    person_folder_id = get_or_create_folder(drive, name, event_folder_id)
 
     archive_existing(drive, person_folder_id)
 
@@ -181,13 +201,58 @@ def main():
     make_world_editable(drive, doc_id)
 
     doc_url  = f"https://docs.google.com/document/d/{doc_id}/edit"
-    form_url = make_form_url(args.name, args.event)
+    form_url = make_form_url(name, event)
 
-    print(f"\n  Folder: https://drive.google.com/drive/folders/{person_folder_id}")
+    print(f"  Folder: https://drive.google.com/drive/folders/{person_folder_id}")
     print(f"  Doc:    {doc_url}")
     print(f"  Form:   {form_url}")
 
-    compose_onboard_email(args.name, args.email, args.event, doc_url, form_url)
+    compose_onboard_email(name, email, event, doc_url, form_url)
+
+
+def read_guests(path):
+    """Read a CSV file with name and email columns (header optional)."""
+    guests = []
+    with open(path, newline="", encoding="utf-8") as f:
+        sample = f.read(1024)
+        f.seek(0)
+        has_header = csv.Sniffer().has_header(sample)
+        reader = csv.reader(f)
+        if has_header:
+            next(reader)
+        for row in reader:
+            if len(row) < 2:
+                continue
+            name, email = row[0].strip(), row[1].strip()
+            if name and email:
+                guests.append((name, email))
+    return guests
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Onboard guests for HSF-India reimbursement")
+    parser.add_argument("--event", required=True, help="Event name, e.g. 'HSF-India Summer 2026'")
+
+    who = parser.add_mutually_exclusive_group(required=True)
+    who.add_argument("--name",  help="Single guest full name")
+    who.add_argument("--file",  help="CSV file with columns: name, email (one guest per row)")
+
+    parser.add_argument("--email", help="Guest email (required with --name)")
+    args = parser.parse_args()
+
+    if args.name and not args.email:
+        parser.error("--email is required when --name is given")
+
+    creds = get_credentials()
+    drive = build("drive", "v3", credentials=creds)
+
+    if args.file:
+        guests = read_guests(args.file)
+        print(f"Found {len(guests)} guest(s) in {args.file}")
+        for name, email in guests:
+            onboard_one(drive, name, email, args.event)
+    else:
+        onboard_one(drive, args.name, args.email, args.event)
 
 
 if __name__ == "__main__":

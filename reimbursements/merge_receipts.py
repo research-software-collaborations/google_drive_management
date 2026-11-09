@@ -62,15 +62,28 @@ def find_doc(drive, folder_id, name):
     return files[0]["id"] if files else None
 
 
+SKIP_SECTIONS = {"Other uploaded documents"}
+
 def extract_file_ids_from_doc(docs, doc_id):
-    """Return list of Drive file IDs linked in the Receipts doc, in order."""
+    """Return list of Drive file IDs linked in the Receipts doc, skipping onboarding sections."""
     doc = docs.documents().get(documentId=doc_id).execute()
     file_ids = []
     seen = set()
+    current_section = None
     for el in doc["body"]["content"]:
         if "paragraph" not in el:
             continue
-        for run in el["paragraph"].get("elements", []):
+        para = el["paragraph"]
+        style = para.get("paragraphStyle", {}).get("namedStyleType", "")
+        if style in ("HEADING_1", "HEADING_2"):
+            current_section = "".join(
+                r.get("textRun", {}).get("content", "")
+                for r in para.get("elements", [])
+            ).strip()
+            continue
+        if current_section in SKIP_SECTIONS:
+            continue
+        for run in para.get("elements", []):
             url = run.get("textRun", {}).get("textStyle", {}).get("link", {}).get("url", "")
             m = re.search(r"/file/d/([^/]+)/", url)
             if m:
